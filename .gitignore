@@ -50,7 +50,9 @@ po/*~
 rsconnect/
 
 # Large files from NHTS
-data/NHTS
+data/NHTS/perpub.csv
+data/NHTS/hhpub.csv
+data/NHTS/trippub.csv
 
 # All model input and output
 model/outputs/
