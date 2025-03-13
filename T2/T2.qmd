@@ -73,6 +73,7 @@ Now we can see a list of the tables that are available in that database.
 
 ```{r}
 base_tables <- dbListTables(base_db)
+print(base_tables)
 
 ```
 
@@ -166,7 +167,7 @@ Now let's look at the alternative case.
 alt_db <- dbConnect(drv=RSQLite::SQLite(), 
                      dbname=here("model",
                                  "outputs",
-                                 "Alternative",
+                                 "UBI-1",
                                  "tdm23.db"))
 
 alt_trip_prod <- dbGetQuery(alt_db, 'SELECT * FROM trip_prod')
@@ -196,13 +197,13 @@ head(alt_block_prod) |>
 Now we can join those two tables and compare them. There are a lot of blocks that register tiny differences, so I'll define a difference as more than half a trip as a meaningful change (you can choose a different tolerance if you like). I'm also going to focus on home-based trips for the moment, since I'll be placing them on a map and the locations of non-home-based trip productions aren't based on the trip-maker's residence.
 
 ```{r}
-tolerance <- 0.5
+tolerance <- 0.05
 
 compare_prod <- full_join(base_block_prod, alt_block_prod) |>
-  mutate(dif_hbw_p = hbw_p_alt - hbw_p,
-         dif_hbsc_p = hbsc_p_alt - hbsc_p,
-         dif_hbsr_p = hbsr_p_alt - hbsr_p,
-         dif_hbpb_p = hbpb_p_alt - hbpb_p) |>
+  mutate(dif_hbw_p = (hbw_p_alt - hbw_p)/hbw_p ,
+         dif_hbsc_p = (hbsc_p_alt - hbsc_p)/hbsc_p,
+         dif_hbsr_p = (hbsr_p_alt - hbsr_p)/hbsc_p,
+         dif_hbpb_p = (hbpb_p_alt - hbpb_p)/hbpb_p) |>
   filter(abs(dif_hbw_p) > tolerance |
          abs(dif_hbsc_p) > tolerance |
          abs(dif_hbsr_p) > tolerance |
@@ -234,14 +235,14 @@ zones <- rbind(ma_blocks, TAZs)
 dif_blocks_prod <- zones |>
   right_join(compare_prod) 
 
-hb_prod_labels <- paste0(formatC(dif_blocks_prod$dif_hbw_p, format = "f", digits = 2),
-                        " change in HBW trips<br/>",
-                        formatC(dif_blocks_prod$dif_hbsc_p, format = "f", digits = 2), 
-                        " change in HB-school trips<br/>",
-                        formatC(dif_blocks_prod$dif_hbsr_p, format = "f", digits = 2),
-                        " change in HB-soc/rec trips<br/>",
-                        formatC(dif_blocks_prod$dif_hbpb_p, format = "f", digits = 2),
-                         " change in HB-per-bus") |>
+hb_prod_labels <- paste0(round((dif_blocks_prod$dif_hbw_p)*100),
+                        "% change in HBW trips<br/>",
+                        round((dif_blocks_prod$dif_hbsc_p)*100), 
+                        "% change in HB-school trips<br/>",
+                        round((dif_blocks_prod$dif_hbsr_p)*100),
+                        "% change in HB-soc/rec trips<br/>",
+                        round(dif_blocks_prod$dif_hbpb_p*100),
+                         "% change in HB-personal-business") |>
   lapply(htmltools::HTML)
 
 leaflet(dif_blocks_prod) |>
@@ -297,7 +298,7 @@ Now let's compare this to the alternative scenario
 alt_db <- dbConnect(drv=RSQLite::SQLite(), 
                      dbname=here("model",
                                  "outputs",
-                                 "Alternative",
+                                 "UBI-1",
                                  "tdm23.db"))
 
 alt_trip_attr <- dbGetQuery(alt_db, 'SELECT * FROM trip_attr') |>
@@ -347,7 +348,7 @@ attr_labels <- paste0(formatC(dif_blocks_attr$diff_hbw_inc1_a, format = "f", dig
                         formatC(dif_blocks_attr$diff_hbsr_a, format = "f", digits = 2),
                         " change in HB-soc/rec trips<br/>",
                         formatC(dif_blocks_attr$diff_hbpb_a, format = "f", digits = 2),
-                         " change in HB-per-bus<br/>",
+                         " change in HB-personal-business<br/>",
                       formatC(dif_blocks_attr$diff_nhbw_a, format = "f", digits = 2),
                         " non-home-based work trips<br/>",
                       formatC(dif_blocks_attr$diff_nhbnw_a, format = "f", digits = 2),
@@ -394,7 +395,7 @@ Let's compare the baseline to the alternative scenario.
 alt_db <- dbConnect(drv=RSQLite::SQLite(), 
                      dbname=here("model",
                                  "outputs",
-                                 "Alternative",
+                                 "UBI-1",
                                  "tdm23.db"))
 
 alt_trip_nhb <- dbGetQuery(alt_db, 'SELECT * FROM prod_nhb') |>
