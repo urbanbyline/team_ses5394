@@ -34,28 +34,6 @@ library(tigris)
 sf::sf_use_s2(FALSE)
 ```
 
-## Run the trip generation model for each scenario
-
-This is assuming you're using the same alternative scenario that you used for the Vehicle Availability assignment.
-
--   Open the model file in TransCAD.
-
--   Select the scenario you want to run (the options should be "Base" and the other scenario that you've previously modified in the `*.scenarios` file).
-
--   Right-click on and of the model steps ans select "Run \>", then "Run Range of Steps". Hold down the Shift or Ctrl key whie selecting "Work From Home" and "Trip Generation." You don't need to rerun the Initialization and Vehicle Availability steps because you still have the outputs from those steps saved.
-
--   Then go get a snack or go for a walk to look at birds or squirrels or something. On my computer, this part of the model run takes ten or fifteen minutes.
-
--   Do this for both the base scenario and the alternative scenario you've created.
-
-```{r}
-
-here("T2",
-     "gifs",
-     "start-run-range.gif") |>
-  knitr::include_graphics()
-```
-
 ## Compare scenario results
 
 The output of the trip generation submodel will be stored the tdm23.db file for each scenario. Let's take a look at the baseline condition.
@@ -432,4 +410,107 @@ leaflet(dif_blocks_nhb) |>
               highlightOptions = highlightOptions(weight = 3,
                                                   fillOpacity = 0.5),
               label = nhb_labels)
+```
+
+### Showing Map of Income Changed Per Zone
+
+```{r}
+TAZs <- here("model",
+             "inputs",
+             "zonal",
+             "shp",
+             "CTPS_TDM23_TAZ_2017g_v202303.shp") |>
+  st_read(quiet = TRUE) |>
+  st_transform("WGS84")
+
+MA_pop <- here("model",
+               "inputs",
+               "zonal",
+               "ma_population_run97-176_2019_v20240109.csv") |>
+  read_csv(show_col_types = FALSE) |>
+  mutate(block_id = as.character(block_id))
+
+head(MA_pop, n = 10) |>
+  kable()
+
+MA_pop <- MA_pop %>%
+  mutate(unique_id = paste(hid, person_num, sep = "_"))
+
+somerville_TAZs <- TAZs |>
+  filter(town %in% c("SOMERVILLE"))
+
+somerville_blocks <-blocks(state="MA",
+                           county="Middlesex",
+                           year = 2010,
+                           progress_bar= FALSE) |>
+  st_transform("WGS84") |>
+  st_filter(somerville_TAZs)
+
+somerville_pop <- here("model",
+                       "inputs",
+                       "zonal",
+                       "ma_population_run97-176_2019_v20240109.csv") |>
+  read_csv(show_col_types = FALSE) |>
+  mutate(block_id = as.character(block_id)) |>
+  filter()
+
+somerville_pop_ubi_one <- here("model",
+               "inputs",
+               "zonal",
+               "somerville_pop_ubi_one.csv") |>
+  read_csv(show_col_types = FALSE)
+
+somerville_pop <- MA_pop %>%
+  filter(block_id %in% somerville_blocks$GEOID10)
+
+somerville_pop <- somerville_pop %>%
+  rename(orig_wage_inc = wage_inc, orig_hh_inc = hh_inc)
+
+somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
+  mutate(unique_id = paste(hid, person_num, sep = "_"))
+
+somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
+  left_join(somerville_pop %>% select(unique_id, orig_wage_inc, orig_hh_inc), by = "unique_id")
+
+somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
+  mutate(hh_inc_percent_change = ((hh_inc - orig_hh_inc) / orig_hh_inc) * 100)
+
+# Step 1: Aggregate to Household Level
+somerville_households <- somerville_pop_ubi_one %>%
+  group_by(hid) %>%  # Assuming hh_id is the unique household identifier
+  summarise(hh_inc_percent_change = mean(hh_inc_percent_change, na.rm = TRUE),
+            block_id = first(block_id))  # Retain block_id for the next step
+
+# Step 2: Aggregate to Block Level and Count Households
+somerville_blocks <- somerville_households %>%
+  group_by(block_id) %>%
+  summarise(avg_percent_change = mean(hh_inc_percent_change, na.rm = TRUE),
+            household_count = n())  # Count unique households in each block
+
+# Count rows where percent_change is Inf
+inf_count <- sum(is.infinite(somerville_pop_ubi_one$hh_inc_percent_change))
+
+# Print the result
+inf_count
+
+somerville_blocks_geo <- blocks(state = "MA", 
+                          county = "Middlesex", 
+                          year = 2010,
+                          progress_bar = FALSE) |>
+  st_transform("WGS84") |>
+  st_filter(somerville_TAZs)
+
+somerville_blocks <- somerville_blocks %>%
+  mutate(GEOID10 = as.character(GEOID10))
+
+somerville_blocks_total <- somerville_blocks_geo %>%
+  left_join(somerville_blocks, by = "GEOID10")
+
+
+```
+
+### Showing Map of Vehicle Availability Changed Per Zone
+
+```{r}
+
 ```
