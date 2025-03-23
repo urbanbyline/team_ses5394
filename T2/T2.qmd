@@ -30,6 +30,9 @@ library(maptiles)
 library(tidyterra)
 library(knitr)
 library(tigris)
+library(dplyr)
+library(viridis)
+library(ggplot2)
 
 sf::sf_use_s2(FALSE)
 ```
@@ -423,19 +426,6 @@ TAZs <- here("model",
   st_read(quiet = TRUE) |>
   st_transform("WGS84")
 
-MA_pop <- here("model",
-               "inputs",
-               "zonal",
-               "ma_population_run97-176_2019_v20240109.csv") |>
-  read_csv(show_col_types = FALSE) |>
-  mutate(block_id = as.character(block_id))
-
-head(MA_pop, n = 10) |>
-  kable()
-
-MA_pop <- MA_pop %>%
-  mutate(unique_id = paste(hid, person_num, sep = "_"))
-
 somerville_TAZs <- TAZs |>
   filter(town %in% c("SOMERVILLE"))
 
@@ -446,25 +436,27 @@ somerville_blocks <-blocks(state="MA",
   st_transform("WGS84") |>
   st_filter(somerville_TAZs)
 
-somerville_pop <- here("model",
-                       "inputs",
-                       "zonal",
-                       "ma_population_run97-176_2019_v20240109.csv") |>
-  read_csv(show_col_types = FALSE) |>
-  mutate(block_id = as.character(block_id)) |>
-  filter()
-
-somerville_pop_ubi_one <- here("model",
+MA_pop <- here("model",
                "inputs",
                "zonal",
-               "somerville_pop_ubi_one.csv") |>
-  read_csv(show_col_types = FALSE)
+               "ma_population_run97-176_2019_v20240109.csv") |>
+  read_csv(show_col_types = FALSE) |>
+  mutate(block_id = as.double(block_id))
+
+MA_pop <- MA_pop %>%
+  mutate(unique_id = paste(hid, person_num, sep = "_"))
 
 somerville_pop <- MA_pop %>%
   filter(block_id %in% somerville_blocks$GEOID10)
 
 somerville_pop <- somerville_pop %>%
   rename(orig_wage_inc = wage_inc, orig_hh_inc = hh_inc)
+
+somerville_pop_ubi_one <- here("model",
+               "inputs",
+               "zonal",
+               "somerville_pop_ubi_one.csv") |>
+  read_csv(show_col_types = FALSE)
 
 somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
   mutate(unique_id = paste(hid, person_num, sep = "_"))
@@ -473,7 +465,9 @@ somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
   left_join(somerville_pop %>% select(unique_id, orig_wage_inc, orig_hh_inc), by = "unique_id")
 
 somerville_pop_ubi_one <- somerville_pop_ubi_one %>%
-  mutate(hh_inc_percent_change = ((hh_inc - orig_hh_inc) / orig_hh_inc) * 100)
+  mutate(hh_inc_percent_change = ((hh_inc - orig_hh_inc) / orig_hh_inc) * 100) %>%
+  mutate(hh_inc_percent_change = ifelse(is.infinite(hh_inc_percent_change), 100, hh_inc_percent_change))
+
 
 # Step 1: Aggregate to Household Level
 somerville_households <- somerville_pop_ubi_one %>%
@@ -501,10 +495,112 @@ somerville_blocks_geo <- blocks(state = "MA",
   st_filter(somerville_TAZs)
 
 somerville_blocks <- somerville_blocks %>%
+  rename(GEOID10 = block_id) %>%
   mutate(GEOID10 = as.character(GEOID10))
 
 somerville_blocks_total <- somerville_blocks_geo %>%
   left_join(somerville_blocks, by = "GEOID10")
+
+summary_stats <- somerville_blocks_total %>%
+  summarize(
+    avg_percent_change_mean = mean(avg_percent_change, na.rm = TRUE),
+    avg_percent_change_sd = sd(avg_percent_change, na.rm = TRUE)
+  )
+
+# Print the results
+print(summary_stats)
+
+somerville_blocks_total <- somerville_blocks_total %>%
+  mutate(percent_change_bucket = case_when(
+    avg_percent_change >= 0   & avg_percent_change < 10   ~ "0-10%",
+    avg_percent_change >= 10  & avg_percent_change < 20   ~ "10-20%",
+    avg_percent_change >= 20  & avg_percent_change < 30   ~ "20-30%",
+    avg_percent_change >= 30  & avg_percent_change < 40   ~ "30-40%",
+    avg_percent_change >= 40  & avg_percent_change < 50   ~ "40-50%",
+    avg_percent_change >= 50  & avg_percent_change < 60   ~ "50-60%",
+    avg_percent_change >= 60  & avg_percent_change < 70   ~ "60-70%",
+    avg_percent_change >= 70  & avg_percent_change < 80   ~ "70-80%",
+    avg_percent_change >= 80  & avg_percent_change < 90   ~ "80-90%",
+    avg_percent_change >= 90  & avg_percent_change < 100  ~ "90-100%",
+    avg_percent_change >= 100                           ~ "100% and above"
+  ))
+
+
+
+somerville_blocks_total <- somerville_blocks_total %>%
+  mutate(percent_change_bucket = factor(percent_change_bucket, levels = c(
+    "0-10%", "10-20%", "20-30%", "30-40%", "40-50%", 
+    "50-60%", "60-70%", "70-80%", "80-90%", "90-100%", "100% and above"
+  )))
+
+# Define color palette with explicit category ordering
+pal <- colorFactor(
+  palette = "YlGnBu",  # Yellow-Green-Blue color scale
+  domain = somerville_blocks_total$percent_change_bucket,
+  na.color = "transparent"
+)
+
+# Create the Leaflet map
+leaflet(somerville_blocks_total) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(
+    fillColor = ~ifelse(is.na(percent_change_bucket), "transparent", pal(percent_change_bucket)),  
+    weight = 1,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = ~ifelse(is.na(percent_change_bucket), 0, 0.7),  # Make NA blocks fully transparent
+    popup = ~paste(
+      "Block GEOID10:", GEOID10, "<br>",
+      "Avg Percent Change:", ifelse(is.na(avg_percent_change), "No Data", round(avg_percent_change, 2)), "%", "<br>",
+      "Household Count:", ifelse(is.na(household_count), "No Data", household_count)
+    )  # Updated popup to handle NA values
+  ) %>%
+  addLegend(
+    "bottomright",
+    pal = pal,
+    values = somerville_blocks_total$percent_change_bucket,  # Use explicitly ordered factor
+    title = "Avg Percent Change",
+    opacity = 1
+  )
+
+
+# Ensure your data is in the `sf` format
+somerville_blocks_total_sf <- st_as_sf(somerville_blocks_total, 
+                                       coords = c("longitude_column", "latitude_column"),  # replace with your actual coordinates
+                                       crs = 4326)  # Set CRS (coordinate reference system)
+
+# Explicitly order percent_change_bucket for the map
+somerville_blocks_total_sf <- somerville_blocks_total_sf %>%
+  mutate(percent_change_bucket = factor(percent_change_bucket, levels = c(
+    "0-10%", "10-20%", "20-30%", "30-40%", "40-50%", 
+    "50-60%", "60-70%", "70-80%", "80-90%", "90-100%", "100% and above"
+  )))
+
+# Plot with ggplot2
+ggplot(somerville_blocks_total_sf) +
+  geom_sf(aes(fill = percent_change_bucket), color = "white", size = 0.2) +
+  scale_fill_viridis(
+    discrete = TRUE,  # Using discrete scale since we have categories
+    option = "YlGnBu",  # Yellow-Green-Blue color scale
+    na.value = "transparent",  # Make NA values transparent
+    name = "Avg Percent Change"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Somerville Blocks: Avg Percent Change"
+  ) +
+  theme(
+    axis.title = element_blank(),  # Remove axis titles
+    axis.text = element_blank(),   # Remove axis labels
+    axis.ticks = element_blank(),  # Remove axis ticks
+    legend.position = "bottom",    # Position the legend at the bottom
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8)
+  )
+
+# Save the plot to a PNG file
+ggsave("somerville_blocks_map_with_legend_no_axes.png", width = 10, height = 8, dpi = 300)
 
 
 ```
