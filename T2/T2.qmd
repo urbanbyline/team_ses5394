@@ -602,11 +602,7 @@ ggplot(somerville_blocks_total_sf) +
 # Save the plot to a PNG file
 ggsave("somerville_blocks_map_with_legend_no_axes.png", width = 10, height = 8, dpi = 300)
 
-
-```
-
-### Showing Map of Vehicle Availability Changed Per Zone
-
-```{r}
+# Save the plot to a PDF file
+ggsave("somerville_blocks_map_with_legend_no_axes.pdf", width = 10, height = 8)
 
 ```
