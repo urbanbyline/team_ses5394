@@ -39,8 +39,6 @@ sf::sf_use_s2(FALSE)
 
 ## Compare scenario results
 
-The output of the trip generation submodel will be stored the tdm23.db file for each scenario. Let's take a look at the baseline condition.
-
 ```{r}
 
 base_db <- dbConnect(drv=RSQLite::SQLite(), 
@@ -50,27 +48,11 @@ base_db <- dbConnect(drv=RSQLite::SQLite(),
                                  "tdm23.db"))
 ```
 
-Now we can see a list of the tables that are available in that database.
-
 ```{r}
 base_tables <- dbListTables(base_db)
 print(base_tables)
 
 ```
-
-The results of the trip generation step will be in the `trip_prod` (trip productions), `trip_attr` (trip attractions), and `prod_nhb` (productions - non-home-based).
-
-It's worth taking a minute to define some terms. Trip ends can be classified into trip origins (where the trip started) and trip destinations (where the trip ended). However, travel demand models generally estimate trip generation in terms of trip productions and attractions rather than origins and destinations.
-
--   A **home-based trip** is any trip that either begins or ends at the trip-maker's home.
-
--   A **trip production** is the home for home-based trips. For non-home-based trips, it is the trip origin.
-
--   A **trip attraction** is the non-home end of a home-based trip. For non-home-based trips, it is the trip destination.
-
-### Home-based trip productions
-
-Let's take a look at the trip production table. I'll first load the entire table into a dataframe.
 
 ```{r}
 
@@ -81,8 +63,6 @@ dbDisconnect(base_db)
 head(base_trip_prod) |>
   kable()
 ```
-
-Work trips were estimated at the worker level, and non-work trips were estimated at the household level. This table includes both, with some rows including only work trips and NA values for the non-work trips, and other rows including only non-work trips, with NA values for work trips. Let's look at these separately. First the work trips.
 
 ```{r}
 base_work_prod <- base_trip_prod |>
@@ -97,9 +77,19 @@ head(base_work_prod) |>
   kable()
 ```
 
-For each worker in each household in each census block, we have the number of home-based work trips and the number of non-home-based work trips.
+#### Definitions:
 
-And now let's look at the non-work trips.
+Home Based Work Trips - HBW_P - person level
+
+Non-Home Based Work Trips - NHWB_P - person level
+
+home-based school trips - HBSC_P household level
+
+home-based social/recreational trips - HBSR_P - household level
+
+home-based personal business - HBPB_P - household level
+
+non-home-based-non-work trips - NHBHW_P - household level
 
 ```{r}
 base_non_work_prod <- base_trip_prod |>
@@ -114,11 +104,8 @@ base_non_work_prod <- base_trip_prod |>
 
 head(base_non_work_prod) |>
   kable()
+
 ```
-
-For non-work trips, the person number is zero, since these are household-level estimates. You can see the number of home-based school trips, home-based social/recreational trips, home-based personal business, and non-home-based-non-work trips produced by each household.
-
-We can aggregate these worker- and household-level trip counts to the census block level.
 
 ```{r}
 
@@ -139,6 +126,11 @@ base_block_prod <- base_trip_prod |>
 
 head(base_block_prod) |>
   kable()
+
+base_block_averages <- base_block_prod %>%
+  summarise(across(c(hbw_p, hbsc_p, hbsr_p, hbpb_p, nhbw_p, nhbnw_p), mean, na.rm = TRUE))
+
+print(base_block_averages)
 ```
 
 Now let's look at the alternative case.
@@ -173,6 +165,11 @@ alt_block_prod <- alt_trip_prod |>
 head(alt_block_prod) |>
   kable()
 
+alt_block_averages <- alt_block_prod %>%
+  summarise(across(c(hbw_p_alt, hbsc_p_alt, hbsr_p_alt, hbpb_p_alt, nhbw_p_alt, nhbnw_p_alt), mean, na.rm = TRUE))
+
+print(alt_block_averages)
+
 ```
 
 Now we can join those two tables and compare them. There are a lot of blocks that register tiny differences, so I'll define a difference as more than half a trip as a meaningful change (you can choose a different tolerance if you like). I'm also going to focus on home-based trips for the moment, since I'll be placing them on a map and the locations of non-home-based trip productions aren't based on the trip-maker's residence.
@@ -189,6 +186,17 @@ compare_prod <- full_join(base_block_prod, alt_block_prod) |>
          abs(dif_hbsc_p) > tolerance |
          abs(dif_hbsr_p) > tolerance |
          abs(dif_hbpb_p) > tolerance)
+
+compare_prod <- compare_prod %>%
+  mutate(dif_hbsr_p = ifelse(is.infinite(dif_hbsr_p), 1, dif_hbsr_p))
+
+compare_prod_summary <- compare_prod %>%
+  summarise(across(c(dif_hbw_p, dif_hbsc_p, dif_hbsr_p, dif_hbpb_p), 
+                   list(mean = ~mean(.x, na.rm = TRUE), 
+                        sd = ~sd(.x, na.rm = TRUE))))
+
+print(compare_prod_summary)
+  
 ```
 
 And now let's see where these differences are on a map.
@@ -235,125 +243,69 @@ leaflet(dif_blocks_prod) |>
               highlightOptions = highlightOptions(weight = 3,
                                                   fillOpacity = 0.5),
               label = hb_prod_labels)
+
+
+
 ```
 
-If you look at the block where we added 300 households, you can see that there hundreds of new trips across all four trip purposes. This is because there are 300 new households there to generate trips. We didn't add households or change the household characteristics in any of the other zones, so the changes you see there are due to:
-
--   Differences in vehicle availability
-
-    -   For work trips (see Table 32 of the Structures and Performance Report)
-
-    -   For personal business, social/recreation, and non-home-based non-work trips (see Table 33 of the Structures and Performance Report)
-
--   Differences in Employment accessibility
-
-    -   For social/recreation trips (see Table 33 of the Structures and Performance Report)
-
-### Trip attractions
-
-Where will all these trips go? Remember that each trip has two ends: a production and an attraction. The trip generation step generates the number of trips attracted to each zone in addition to the number of trips produced by each zone. While trip production models are generally based on household characteristics, trip attraction models are generally based on employment data. See Table 34 of the Structures and Performance report for the trip attraction rates used in TDM23.
-
-Let's take a look at the trip attractions estimated for the baseline scenario.
+#### GG Plot of Trip Generation Comparison
 
 ```{r}
-base_db <- dbConnect(drv=RSQLite::SQLite(), 
-                     dbname=here("model",
-                                 "outputs",
-                                 "Base",
-                                 "tdm23.db"))
+library(ggthemes)
+library(RColorBrewer)
 
-base_trip_attr <- dbGetQuery(base_db, 'SELECT * FROM trip_attr')
+# Load and transform block and TAZ data
+ma_blocks <- blocks(state = "MA", 
+                    year = 2010,
+                    progress_bar = FALSE) |>
+  st_transform("WGS84") |>
+  rename(block_id = GEOID10) |>
+  select(block_id)
 
-dbDisconnect(base_db)
+TAZs <- here("model",
+             "inputs",
+             "zonal",
+             "shp",
+             "CTPS_TDM23_TAZ_2017g_v202303.shp") |>
+  st_read(quiet = TRUE) |>
+  st_transform("WGS84") |>
+  mutate(block_id = as.character(taz_id)) |>
+  select(block_id)
 
-head(base_trip_attr) |>
-  kable()
+# Merge blocks and TAZs
+zones <- rbind(ma_blocks, TAZs)
+
+# Join with production data
+dif_blocks_prod <- zones |>
+  right_join(compare_prod, by = "block_id")
+
+# Bin % change in 10% increments, capping at 100%
+dif_blocks_prod <- dif_blocks_prod %>%
+  mutate(hbsr_bin = cut(dif_hbsr_p * 100, 
+                        breaks = c(0, seq(10, 100, by = 10), Inf), 
+                        labels = c("0% to 10%", "10% to 20%", "20% to 30%", "30% to 40%", 
+                                   "40% to 50%", "50% to 60%", "60% to 70%", "70% to 80%", 
+                                   "80% to 90%", "90% to 100%", "100%+"), 
+                        include.lowest = TRUE))
+
+# Define color palette
+color_palette <- scale_fill_manual(values = rev(RColorBrewer::brewer.pal(11, "RdYlGn")), 
+                                   name = "% Change in HB-soc/rec Trips")
+
+# Plot static ggplot map
+ggplot() +
+  geom_sf(data = dif_blocks_prod, aes(fill = hbsr_bin), color = NA) +
+  color_palette +
+  theme_minimal() +
+  labs(title = "Percentage Change in Home-Based Social/Rec Trips",
+       fill = "Change Category") +
+  theme(legend.position = "bottom")
+
+# Save the plot to a PDF file
+ggsave("somerville_blocks_percent_change_hbsr.pdf", width = 10, height = 8)
 ```
-
-You can see the number of trips attracted to each block for each of the six trip purposes. Home-based work trips are further segmented by income (based on the share of workers with different earnings that work in each employment sector).
-
-Now let's compare this to the alternative scenario
-
-```{r}
-
-alt_db <- dbConnect(drv=RSQLite::SQLite(), 
-                     dbname=here("model",
-                                 "outputs",
-                                 "UBI-1",
-                                 "tdm23.db"))
-
-alt_trip_attr <- dbGetQuery(alt_db, 'SELECT * FROM trip_attr') |>
-  rename_with(~ paste0("alt_", .x),
-              ends_with("_a")) 
-
-dbDisconnect(alt_db)
-
-compare_attr <- full_join(base_trip_attr, alt_trip_attr) |>
-  mutate(diff_hbw_inc1_a = alt_hbw_inc1_a - hbw_inc1_a,
-         diff_hbw_inc2_a = alt_hbw_inc2_a - hbw_inc2_a,
-         diff_hbw_inc3_a = alt_hbw_inc3_a - hbw_inc3_a,
-         diff_hbw_inc4_a = alt_hbw_inc4_a - hbw_inc4_a,
-         diff_hbsr_a = alt_hbsr_a - hbsr_a,
-         diff_hbsc_a = alt_hbsc_a - hbsc_a,
-         diff_hbpb_a = alt_hbpb_a - hbpb_a,
-         diff_nhbw_a = alt_nhbw_a - nhbw_a,
-         diff_nhbnw_a = alt_nhbnw_a - nhbnw_a) |>
-  filter(abs(diff_hbw_inc1_a) > tolerance |
-           abs(diff_hbw_inc2_a) > tolerance |
-           abs(diff_hbw_inc3_a) > tolerance |
-           abs(diff_hbw_inc4_a) > tolerance |
-           abs(diff_hbsc_a) > tolerance |
-           abs(diff_hbsr_a) > tolerance |
-           abs(diff_hbpb_a) > tolerance |
-           abs(diff_nhbw_a) > tolerance |
-           abs(diff_nhbnw_a) > tolerance)
-```
-
-Only four blocks had a change in the number of trip attractions. This is because the primary factor that is influencing trip attractions in this model is the number of jobs in a zone, and we only changed employment in one zone. Let's look at these changes on a map.
-
-```{r}
-
-dif_blocks_attr <- zones |>
-  right_join(compare_attr) 
-
-attr_labels <- paste0(formatC(dif_blocks_attr$diff_hbw_inc1_a, format = "f", digits = 2),
-                        " change in HBW trips (< $35k)<br/>",
-                      formatC(dif_blocks_attr$diff_hbw_inc2_a, format = "f", digits = 2),
-                        " change in HBW trips ($35k - $65k)<br/>",
-                      formatC(dif_blocks_attr$diff_hbw_inc3_a, format = "f", digits = 2),
-                        " change in HBW trips ($65k - $100k)<br/>",
-                      formatC(dif_blocks_attr$diff_hbw_inc4_a, format = "f", digits = 2),
-                        " change in HBW trips (> $100k)<br/>",
-                        formatC(dif_blocks_attr$diff_hbsc_a, format = "f", digits = 2), 
-                        " change in HB-school trips<br/>",
-                        formatC(dif_blocks_attr$diff_hbsr_a, format = "f", digits = 2),
-                        " change in HB-soc/rec trips<br/>",
-                        formatC(dif_blocks_attr$diff_hbpb_a, format = "f", digits = 2),
-                         " change in HB-personal-business<br/>",
-                      formatC(dif_blocks_attr$diff_nhbw_a, format = "f", digits = 2),
-                        " non-home-based work trips<br/>",
-                      formatC(dif_blocks_attr$diff_nhbnw_a, format = "f", digits = 2),
-                        " change in non-home-based non-work trips") |>
-  lapply(htmltools::HTML)
-
-leaflet(dif_blocks_attr) |>
-  addProviderTiles(provider = "CartoDB.Positron") |>
-  addPolygons(weight = 2,
-              color = "forestgreen",
-              fillColor = "forestgreen",
-              fillOpacity = 0.1,
-              highlightOptions = highlightOptions(weight = 3,
-                                                  fillOpacity = 0.5),
-              label = attr_labels)
-```
-
-The differences in trip attractions are limited to the areas in and immediately adjacent to the block where we made our changes.
 
 ### Non-home-based trip productions
-
-The non-home-based trip productions are placed in zones based on the distribution of trip attractions rather than the home locations of the trip makers.
-
-The `prod_nhb` table shows the number of non-home-based work trips and non-home-based non-work trips in each zone.
 
 ```{r}
 base_db <- dbConnect(drv=RSQLite::SQLite(), 
@@ -369,8 +321,6 @@ dbDisconnect(base_db)
 head(base_trip_nhb) |>
   kable()
 ```
-
-Let's compare the baseline to the alternative scenario.
 
 ```{r}
 alt_db <- dbConnect(drv=RSQLite::SQLite(), 
@@ -391,8 +341,6 @@ compare_nhb <- full_join(base_trip_nhb, alt_trip_nhb) |>
   filter(abs(diff_nhbw_p) > tolerance |
            abs(diff_nhbnw_p) > tolerance)
 ```
-
-Difference in non-home-based trips productions much more spread out across 138 zones. Let's look at them on a map.
 
 ```{r}
 dif_blocks_nhb <- zones |>
