@@ -35,63 +35,23 @@ library(RColorBrewer)
 sf::sf_use_s2(FALSE)
 ```
 
-## Run the mode choice model for each scenario
+## Identify Somerville zones
 
-This is assuming you're using the same alternative scenario that you used for prior assignments.
+lorem ipsum
 
--   Open the model file in TransCAD.
+```{r}
 
--   Select the scenario you want to run (the options should be "Base" and the other scenario that you've previously modified in the `*.scenarios` file).
+somerville_zones <- here("model",
+             "inputs",
+             "zonal",
+             "shp",
+             "CTPS_TDM23_TAZ_2017g_v202303.shp") |>
+  st_read(quiet = TRUE) |>
+  st_drop_geometry() |>
+  select(taz_id, town) |>
+  filter(town == "SOMERVILLE")
 
--   Right-click on and of the model steps and select "Run \>", then "Run Step".
-
--   Do this for both the base scenario and the alternative scenario you've created.
-
-```{r, echo=FALSE}
-
-here("T4",
-     "gifs",
-     "run-mode-choice.gif") |>
-  knitr::include_graphics()
 ```
-
-## Export trip matrices to .omx files
-
-The TDM23 model saves the production-attraction matrices as \*.mtx files, which I haven't had luck importing into R, so you should export them as \*.omx files and open them using Greg Macfarlane's `omxr` package.
-
-The trip matrix for the folder will be in a file called pa_all_all.mtx, which you can find in your model outputs folder:
-
--   outputs
-
-    -   (scenario name)
-
-        -   \_demand
-
-            -   mc
-
-                -   mc_hhpurp_daily.mtx
-
-There are other matrix files that have disaggregated trip totals by peak and off-peak time periods and by trip purpose. Feel free to use those in your comparison, but in this example, I'm just using the daily totals across all trip purposes.
-
-To export the \*.mtx file as a \*.omx file:
-
-1.  Open the matrix file in TransCAD
-
-2.  Select "Export" then "Table..." from the "File" menu.
-
-3.  Set the file type as "OMX Matrix", select a filename, and click "Save."
-
-4.  Click the "Select All" button to get the flows for all modes and click "OK".
-
-```{r, echo=FALSE}
-
-here("T4",
-     "gifs",
-     "omx-export.gif") |>
-  knitr::include_graphics()
-```
-
-Do this for both your base scenario and your alternative scenario.
 
 ## Load trip matrices in R
 
@@ -106,6 +66,10 @@ base_mc <- here("model",
                 "mc",
                 "hh_trips_daily.omx") |>
   read_all_omx()
+
+somerville_mc_base <- base_mc |>
+  filter(origin %in% somerville_zones$taz_id |
+           destination %in% somerville_zones$taz_id)
 
 head(base_mc) |>
   kable(digits = 1)
@@ -142,7 +106,7 @@ And we can also load the production-attraction matrix for the alternative scenar
 
 alt_mc <- here("model",
              "outputs",
-             "Alternative",
+             "UBI-1",
              "_demand",
              "mc",
              "hh_trips_daily.omx") |>
@@ -150,13 +114,55 @@ alt_mc <- here("model",
 
 head(alt_mc) |>
   kable(digits = 1)
+
+somerville_mc_alt <- alt_mc |>
+  filter(origin %in% somerville_zones$taz_id |
+           destination %in% somerville_zones$taz_id)
+
+# Columns to sum
+cols_to_sum <- c("da", "rs", "s2", "s3", "sb", "ta", "tw", "wk", "bk")
+
+# --- 1. Create total summary dataframes ---
+
+# ALT totals
+somerville_mc_alt_totals <- as.data.frame(t(sapply(cols_to_sum, function(col) {
+  sum(somerville_mc_alt[[col]], na.rm = TRUE)
+})))
+colnames(somerville_mc_alt_totals) <- paste0(cols_to_sum, "_total")
+
+# BASE totals
+somerville_mc_base_totals <- as.data.frame(t(sapply(cols_to_sum, function(col) {
+  sum(somerville_mc_base[[col]], na.rm = TRUE)
+})))
+colnames(somerville_mc_base_totals) <- paste0(cols_to_sum, "_total")
+
+# --- 2. Rename columns to track source ---
+
+colnames(somerville_mc_alt_totals) <- paste0(colnames(somerville_mc_alt_totals), "_alt")
+colnames(somerville_mc_base_totals) <- paste0(colnames(somerville_mc_base_totals), "_base")
+
+# --- 3. Combine into comparison dataframe ---
+
+somerville_mc_comparison <- cbind(somerville_mc_alt_totals, somerville_mc_base_totals)
+
+# --- 4. Compute differences ---
+
+# Get base variable names
+base_names <- gsub("_total_base$", "", names(somerville_mc_comparison)[grepl("_total_base$", names(somerville_mc_comparison))])
+
+# Compute difference for each variable (corrected)
+somerville_mc_difference <- as.data.frame(t(sapply(base_names, function(name) {
+  somerville_mc_comparison[[paste0(name, "_total_alt")]] - somerville_mc_comparison[[paste0(name, "_total_base")]]
+})))
+
+# Name the columns
+colnames(somerville_mc_difference) <- paste0(base_names, "_difference")
+
+
+
 ```
 
 ## Calculate Mode Shares
-
-Differences in trip counts within each mode could be a result of changes in trip generation, trip distribution, or mode split. To focus more narrowly on mode split, we can calculate mode shares for trips beginning or ending in each zone.
-
-Here is a function that do that calculation.
 
 ```{r}
 
@@ -195,58 +201,52 @@ mode_share_by_zone <- function(mc_table) {
            wk_pct = wk / total) |>
     select(zone,
            total,
-           bk_pct,
-           da_pct,
-           rs_pct,
-           s2_pct,
-           s3_pct,
-           sb_pct,
-           ta_pct,
-           tw_pct,
-           wk_pct)
+           bk,
+           da,
+           rs,
+           s2,
+           s3,
+           sb,
+           ta,
+           tw,
+           wk)
 }
 ```
 
-And we can use that function to calculate mode shares by zone for the base and alternative conditions. I'm also using `rename_with` to add a prefix to the column names differentiating between the
-
 ```{r, message=FALSE}
 
-base_mc_by_zone <- mode_share_by_zone(base_mc)
+base_mc_by_zone_total <- mode_share_by_zone(somerville_mc_base)
 
-alt_mc_by_zone <- mode_share_by_zone(alt_mc)
+alt_mc_by_zone_total <- mode_share_by_zone(somerville_mc_alt)
 ```
 
 ## Check for differences
 
-Now we can compare the mode shares.
-
 ```{r, message=FALSE}
-base_mc_by_zone <- base_mc_by_zone |>
+base_mc_by_zone_total <- base_mc_by_zone_total |>
   rename_with(~ paste0("base_", .), -all_of("zone"))
 
-alt_mc_by_zone <- alt_mc_by_zone |>
+alt_mc_by_zone_total <- alt_mc_by_zone_total |>
   rename_with(~ paste0("alt_", .), -all_of("zone"))
 
-mc_comparison <- full_join(base_mc_by_zone, alt_mc_by_zone) |>
+mc_comparison <- full_join(base_mc_by_zone_total, alt_mc_by_zone_total) |>
   replace_na(list(base_total = 0,
                   alt_total = 0)) |>
   filter(alt_total + base_total > 0) |>
-  mutate(diff_bk = alt_bk_pct - base_bk_pct,
-         diff_da = alt_da_pct - base_da_pct,
-         diff_rs = alt_rs_pct - base_rs_pct,
-         diff_s2 = alt_s2_pct - base_s2_pct,
-         diff_s3 = alt_s3_pct - base_s3_pct,
-         diff_sb = alt_sb_pct - base_sb_pct,
-         diff_ta = alt_ta_pct - base_ta_pct,
-         diff_tw = alt_tw_pct - base_tw_pct,
-         diff_wk = alt_wk_pct - base_wk_pct)
+  mutate(diff_bk = alt_bk - base_bk,
+         diff_da = alt_da - base_da,
+         diff_rs = alt_rs - base_rs,
+         diff_s2 = alt_s2 - base_s2,
+         diff_s3 = alt_s3 - base_s3,
+         diff_sb = alt_sb - base_sb,
+         diff_ta = alt_ta - base_ta,
+         diff_tw = alt_tw - base_tw,
+         diff_wk = alt_wk - base_wk)
 
 ```
 
-And, as an example, here is a map of how the share of people driving alone changes throughout the study area. Note that I'm filtering the data to only register a change if there's a difference of at least 0.01 percentage points.
-
 ```{r, message=FALSE}
-drive_comparison <- here("model",
+somerville_zones <- here("model",
              "inputs",
              "zonal",
              "shp",
@@ -255,28 +255,32 @@ drive_comparison <- here("model",
   st_transform("WGS84") |>
   rename(zone = taz_id) |>
   left_join(mc_comparison) |>
-  filter(abs(diff_da) > 0.001)
+  filter(abs(diff_da) > 0.001) |>
+  filter(town == "SOMERVILLE")
 
-base_map <- get_tiles(drive_comparison,
+base_map <- get_tiles(somerville_zones,
                       provider = "CartoDB.Positron",
                       zoom = 13,
                       crop = TRUE)
 
-ggplot(drive_comparison) +
+# Create and assign the plot
+changes_da_somerville <- ggplot(somerville_zones) +
   geom_spatraster_rgb(data = base_map) +
   geom_sf(aes(fill = diff_da),
           color = NA,
           alpha = 0.7) +
   scale_fill_gradient2(name = "Difference in share\nof drive-alone trips") +
   theme_void()
-```
 
-In general, we see that all the changes are fairly small, with the exception of one zone where there the alternative would result in reduction in drive-alone trips of about 9 percentage points. Let's take a closer look at that one zone.
+# Save the plot
+ggsave("changes_da_somerville.png", plot = changes_da_somerville, width = 8, height = 6, dpi = 300)
+
+```
 
 ```{r}
 
 mc_comparison |> 
-  filter(diff_da < -0.05) |>
+  filter(diff_da < .5) |>
   select(base_total,
          alt_total,
          diff_da,
@@ -290,5 +294,3 @@ mc_comparison |>
   t() |>
   kable(digits = 2)
 ```
-
-What we see above is a reduction in the share of private car trips of about 13 percentage points (11 percentage points from drive-alone trips, and one percentage point from each of two-person and three-plus-person car pools). This share is mostly shifting to walk trips (a six-percentage point increase) and transit trips (a five percentage-point increase - including four percentage points for walk-access and one percentage point for drive access).
